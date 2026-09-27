@@ -1,0 +1,24 @@
+{
+  "name": "taskflow-pro",
+  "version": "1.0.0",
+  "description": "TaskFlow Pro - Dependency-Aware DAG Workflow Platform with AI-Augmented Suggestions",
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev": "node -e \"const { spawn } = require('child_process'); spawn('npm', ['--prefix', 'backend', 'start'], { stdio: 'inherit', shell: true }); spawn('npm', ['--prefix', 'frontend', 'run', 'dev'], { stdio: 'inherit', shell: true });\"",
+    "test": "npm --prefix backend test",
+    "seed": "npm --prefix backend run seed",
+    "migrate": "npm --prefix backend run migrate",
+    "build": "npm --prefix frontend run build"
+  },
+  "keywords": [
+    "dag",
+    "kanban",
+    "gemini",
+    "workflow",
+    "cpm",
+    "dependency-graph"
+  ],
+  "author": "TaskFlow Pro Team",
+  "license": "MIT"
+}
