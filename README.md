@@ -2,6 +2,11 @@
 
 TaskFlow Pro is a dependency-aware project and workflow management platform featuring a high-precision Directed Acyclic Graph (DAG) engine behind an interactive Kanban board and SVG DAG visualizer. It manages prerequisite chains, performs cycle detection with path reporting, calculates non-compounding schedule propagation across converging paths (diamond dependencies), enforces downstream blocking and rollback cascade, and provides AI-augmented dependency suggestions powered by the Google Gemini API with anti-hallucination grounding.
 
+> 📖 **System Documentation & Evaluation Resources:**
+> - **System Architecture & Data Model:** See [docs/DESIGN.md](docs/DESIGN.md) for the full architecture, data model, and known limitations.
+> - **Test Suite Execution:** See [docs/TEST_RESULTS.md](docs/TEST_RESULTS.md) for full test suite coverage (25 passing unit & integration tests).
+> - **Known Edge Cases:** See [docs/KNOWN_FAILURE_CASES.md](docs/KNOWN_FAILURE_CASES.md) for explicit scope boundary & edge case write-ups.
+
 ---
 
 ## Architecture
