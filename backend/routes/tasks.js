@@ -7,6 +7,7 @@ import {
   formatDate,
   diffDays
 } from '../engine/dagEngine.js';
+import { validateTaskInput, isValidId } from '../utils/validation.js';
 
 const router = express.Router();
 
@@ -68,13 +69,13 @@ router.get('/', async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching tasks:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to fetch tasks.' });
   }
 });
 
 /**
  * POST /api/tasks
- * Create a new task
+ * Create a new task with strict input validation
  */
 router.post('/', async (req, res) => {
   try {
@@ -88,8 +89,19 @@ router.post('/', async (req, res) => {
       position = 0
     } = req.body;
 
-    if (!title || !title.trim()) {
-      return res.status(400).json({ success: false, error: 'Task title is required.' });
+    const validation = validateTaskInput({
+      title,
+      column_status,
+      start_date,
+      end_date,
+      base_duration_days
+    }, true);
+
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: validation.errors.join(' ')
+      });
     }
 
     // Calculate base duration if dates are given
@@ -104,12 +116,12 @@ router.post('/', async (req, res) => {
        RETURNING *`,
       [
         title.trim(),
-        description.trim(),
+        description ? description.trim() : '',
         column_status,
         formatDate(start_date),
         formatDate(end_date),
         duration,
-        position
+        parseInt(position, 10) || 0
       ]
     );
 
@@ -125,7 +137,7 @@ router.post('/', async (req, res) => {
     });
   } catch (err) {
     console.error('Error creating task:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to create task.' });
   }
 });
 
@@ -136,6 +148,11 @@ router.post('/', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!isValidId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid task ID format.' });
+    }
+
     const {
       title,
       description,
@@ -145,6 +162,21 @@ router.patch('/:id', async (req, res) => {
       base_duration_days,
       position
     } = req.body;
+
+    const validation = validateTaskInput({
+      title,
+      column_status,
+      start_date,
+      end_date,
+      base_duration_days
+    });
+
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: validation.errors.join(' ')
+      });
+    }
 
     const currentTaskRes = await query('SELECT * FROM tasks WHERE id = $1', [id]);
     if (currentTaskRes.rowCount === 0) {
@@ -168,8 +200,8 @@ router.patch('/:id', async (req, res) => {
       }
     }
 
-    const updatedTitle = title !== undefined ? title : currentTask.title;
-    const updatedDesc = description !== undefined ? description : currentTask.description;
+    const updatedTitle = title !== undefined ? title.trim() : currentTask.title;
+    const updatedDesc = description !== undefined ? (description ? description.trim() : '') : currentTask.description;
     const updatedCol = column_status !== undefined ? column_status : currentTask.column_status;
     const updatedStart = start_date !== undefined ? formatDate(start_date) : currentTask.start_date;
     const updatedEnd = end_date !== undefined ? formatDate(end_date) : currentTask.end_date;
@@ -206,7 +238,7 @@ router.patch('/:id', async (req, res) => {
     });
   } catch (err) {
     console.error('Error updating task:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to update task.' });
   }
 });
 
@@ -217,7 +249,17 @@ router.patch('/:id', async (req, res) => {
 router.post('/:id/move', async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!isValidId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid task ID format.' });
+    }
+
     const { column_status, position = 0 } = req.body;
+
+    const validation = validateTaskInput({ column_status });
+    if (!validation.isValid) {
+      return res.status(400).json({ success: false, error: validation.errors.join(' ') });
+    }
 
     const currentTaskRes = await query('SELECT * FROM tasks WHERE id = $1', [id]);
     if (currentTaskRes.rowCount === 0) {
@@ -228,7 +270,6 @@ router.post('/:id/move', async (req, res) => {
 
     // Enforce dependency blocking rule: cannot move a blocked task to active columns (in_progress, review, done)
     if (column_status !== 'backlog' && currentTask.dependency_status === 'blocked') {
-      // Find unmet prerequisites to give a helpful descriptive error message
       const prereqsRes = await query(
         `SELECT t.id, t.title, t.column_status
          FROM dependencies d
@@ -248,7 +289,7 @@ router.post('/:id/move', async (req, res) => {
     // Update target task column and position
     await query(
       `UPDATE tasks SET column_status = $1, position = $2, updated_at = now() WHERE id = $3`,
-      [column_status, position, id]
+      [column_status, parseInt(position, 10) || 0, id]
     );
 
     // Run DAG cascade recomputation
@@ -267,7 +308,7 @@ router.post('/:id/move', async (req, res) => {
     });
   } catch (err) {
     console.error('Error moving task:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to move task.' });
   }
 });
 
@@ -278,13 +319,28 @@ router.post('/:id/move', async (req, res) => {
 router.post('/:id/reschedule', async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!isValidId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid task ID format.' });
+    }
+
     const { start_date, end_date, buffer_days = 1 } = req.body;
 
     if (!end_date) {
       return res.status(400).json({ success: false, error: 'end_date is required for rescheduling.' });
     }
 
+    const validation = validateTaskInput({ start_date, end_date });
+    if (!validation.isValid) {
+      return res.status(400).json({ success: false, error: validation.errors.join(' ') });
+    }
+
     const allTasksRes = await query('SELECT * FROM tasks');
+    const targetTask = allTasksRes.rows.find(t => t.id === id);
+    if (!targetTask) {
+      return res.status(404).json({ success: false, error: 'Task not found.' });
+    }
+
     const allDepsRes = await query('SELECT * FROM dependencies');
 
     const { tasks: propagatedTasks, auditLogs } = propagateSchedule({
@@ -323,7 +379,7 @@ router.post('/:id/reschedule', async (req, res) => {
     });
   } catch (err) {
     console.error('Error rescheduling task:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to reschedule task.' });
   }
 });
 
@@ -334,6 +390,10 @@ router.post('/:id/reschedule', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!isValidId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid task ID format.' });
+    }
 
     const taskRes = await query('SELECT * FROM tasks WHERE id = $1', [id]);
     if (taskRes.rowCount === 0) {
@@ -353,11 +413,12 @@ router.delete('/:id', async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Task deleted successfully.'
+      message: 'Task deleted successfully.',
+      cascadeUpdatedTasks: updatedTasks
     });
   } catch (err) {
     console.error('Error deleting task:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to delete task.' });
   }
 });
 

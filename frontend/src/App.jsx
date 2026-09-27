@@ -12,9 +12,10 @@ import {
   moveTask,
   deleteTask,
   fetchCriticalPath,
+  fetchAiStatus,
   resetDemoData
 } from './services/api';
-import { Sparkles, Info, RefreshCw } from 'lucide-react';
+import { Sparkles, RefreshCw, Layers } from 'lucide-react';
 
 export default function App() {
   const [tasks, setTasks] = useState([]);
@@ -25,6 +26,7 @@ export default function App() {
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
   const [criticalPathActive, setCriticalPathActive] = useState(false);
   const [criticalPathData, setCriticalPathData] = useState({ criticalPathTaskIds: [], totalDurationDays: 0 });
+  const [aiStatus, setAiStatus] = useState({ mode: 'heuristic', description: 'Semantic Heuristic Engine' });
   const [toasts, setToasts] = useState([]);
 
   // Toast Helper
@@ -56,20 +58,27 @@ export default function App() {
     }
   }, [addToast]);
 
-  // Load Critical Path
-  const loadCriticalPath = useCallback(async () => {
+  // Load Critical Path & AI Status
+  const loadAuxData = useCallback(async () => {
     try {
       const cp = await fetchCriticalPath();
       setCriticalPathData(cp);
     } catch (err) {
       console.warn('Could not compute critical path:', err);
     }
+
+    try {
+      const status = await fetchAiStatus();
+      if (status) setAiStatus(status);
+    } catch (err) {
+      console.warn('Could not fetch AI status:', err);
+    }
   }, []);
 
   useEffect(() => {
     loadTasks();
-    loadCriticalPath();
-  }, [loadTasks, loadCriticalPath]);
+    loadAuxData();
+  }, [loadTasks, loadAuxData]);
 
   // Drag and Drop Handler with DAG blocking enforcement
   const handleTaskMove = async ({ taskId, task, sourceColumn, destinationColumn, destinationIndex }) => {
@@ -104,7 +113,7 @@ export default function App() {
       await moveTask(taskId, destinationColumn, destinationIndex);
       // Refetch to sync downstream cascade statuses (e.g. dependent tasks transitioning from blocked -> ready or ready -> blocked)
       await loadTasks();
-      await loadCriticalPath();
+      await loadAuxData();
     } catch (err) {
       // Revert optimistic update on failure
       setTasks(previousTasks);
@@ -147,7 +156,7 @@ export default function App() {
       }
       setIsModalOpen(false);
       await loadTasks();
-      await loadCriticalPath();
+      await loadAuxData();
     } catch (err) {
       addToast({ type: 'error', title: 'Save Failed', message: err.message });
       throw err;
@@ -164,7 +173,7 @@ export default function App() {
       addToast({ type: 'info', title: 'Task Deleted', message: 'Task deleted and graph recomputed.' });
       setIsModalOpen(false);
       await loadTasks();
-      await loadCriticalPath();
+      await loadAuxData();
     } catch (err) {
       addToast({ type: 'error', title: 'Delete Failed', message: err.message });
     }
@@ -183,7 +192,7 @@ export default function App() {
         message: 'Loaded 9 realistic tasks with diamond convergence graph.'
       });
       await loadTasks();
-      await loadCriticalPath();
+      await loadAuxData();
     } catch (err) {
       addToast({ type: 'error', title: 'Reset Error', message: err.message });
     }
@@ -213,6 +222,7 @@ export default function App() {
         onOpenAuditLogs={() => setIsAuditModalOpen(true)}
         onResetDemo={handleResetDemo}
         onNewTask={() => handleNewTask('backlog')}
+        aiStatus={aiStatus}
         tasksCount={tasks.length}
       />
 
@@ -234,12 +244,12 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3 text-slate-400">
-            <span className="flex items-center gap-1">
+            <span className="flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              Gemini AI Suggestions: <span className="text-slate-200">Active</span>
+              <span>AI Engine: <strong className="text-slate-200">{aiStatus?.description}</strong></span>
             </span>
             <span>•</span>
-            <span>Cycle Prevention: <span className="text-teal-400 font-medium">Enforced</span></span>
+            <span>Cycle Prevention: <strong className="text-teal-400">Enforced (DFS)</strong></span>
           </div>
         </div>
 
@@ -280,7 +290,7 @@ export default function App() {
         onDelete={handleDeleteTask}
         onGraphUpdate={async () => {
           await loadTasks();
-          await loadCriticalPath();
+          await loadAuxData();
         }}
         addToast={addToast}
       />

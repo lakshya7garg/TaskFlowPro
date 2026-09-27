@@ -5,7 +5,8 @@ import {
   propagateSchedule,
   calculateCriticalPath,
   formatDate,
-  addDays
+  addDays,
+  diffDays
 } from '../engine/dagEngine.js';
 
 describe('DAG Engine - Directed Acyclic Graph Logic', () => {
@@ -139,9 +140,37 @@ describe('DAG Engine - Directed Acyclic Graph Logic', () => {
         { id: 'task-B', old_dependency_status: 'blocked', new_dependency_status: 'ready' }
       ]);
     });
+
+    test('3-level chain: completing A does not unblock C until B is also done', () => {
+      // 3-level chain: A -> B -> C
+      let currentTasks = [
+        { id: 'A', title: 'Task A', column_status: 'in_progress', dependency_status: 'ready' },
+        { id: 'B', title: 'Task B', column_status: 'backlog', dependency_status: 'blocked' },
+        { id: 'C', title: 'Task C', column_status: 'backlog', dependency_status: 'blocked' }
+      ];
+      const dependencies = [
+        { id: 'd1', task_id: 'B', depends_on_task_id: 'A' },
+        { id: 'd2', task_id: 'C', depends_on_task_id: 'B' }
+      ];
+
+      // Step 1: Complete A
+      currentTasks[0].column_status = 'done';
+      let pass1 = recomputeGraphDependencyStatuses(currentTasks, dependencies);
+      
+      let taskB = pass1.tasks.find(t => t.id === 'B');
+      let taskC = pass1.tasks.find(t => t.id === 'C');
+      expect(taskB.dependency_status).toBe('ready');
+      expect(taskC.dependency_status).toBe('blocked'); // C MUST remain blocked!
+
+      // Step 2: Complete B
+      pass1.tasks.find(t => t.id === 'B').column_status = 'done';
+      let pass2 = recomputeGraphDependencyStatuses(pass1.tasks, dependencies);
+      taskC = pass2.tasks.find(t => t.id === 'C');
+      expect(taskC.dependency_status).toBe('ready'); // Now C unblocks!
+    });
   });
 
-  describe('3.3 No-Compounding Schedule Propagation (Diamond Convergence Test)', () => {
+  describe('3.3 No-Compounding Schedule Propagation (Diamond Convergence & Deep Multi-Level Tests)', () => {
     test('propagates delay through diamond graph without compounding delay additively', () => {
       /**
        * Diamond Graph Scenario:
@@ -214,6 +243,45 @@ describe('DAG Engine - Directed Acyclic Graph Logic', () => {
       // Check audit log entries were created for downstream affected tasks
       expect(auditLogs.length).toBe(3); // B, C, and D
       expect(auditLogs.map(l => l.task_id)).toEqual(['B', 'C', 'D']);
+    });
+
+    test('deep multi-level propagation (A -> B -> D -> F and A -> C -> D -> F)', () => {
+      const initialTasks = [
+        { id: 'A', title: 'Task A', start_date: '2026-10-01', end_date: '2026-10-03', base_duration_days: 3 },
+        { id: 'B', title: 'Task B', start_date: '2026-10-04', end_date: '2026-10-05', base_duration_days: 2 },
+        { id: 'C', title: 'Task C', start_date: '2026-10-04', end_date: '2026-10-07', base_duration_days: 4 },
+        { id: 'D', title: 'Task D', start_date: '2026-10-08', end_date: '2026-10-09', base_duration_days: 2 },
+        { id: 'F', title: 'Task F', start_date: '2026-10-10', end_date: '2026-10-11', base_duration_days: 2 }
+      ];
+
+      const dependencies = [
+        { id: 'd1', task_id: 'B', depends_on_task_id: 'A' },
+        { id: 'd2', task_id: 'C', depends_on_task_id: 'A' },
+        { id: 'd3', task_id: 'D', depends_on_task_id: 'B' },
+        { id: 'd4', task_id: 'D', depends_on_task_id: 'C' },
+        { id: 'd5', task_id: 'F', depends_on_task_id: 'D' }
+      ];
+
+      // A shifts by +2 days (from 2026-10-03 to 2026-10-05)
+      const { tasks: propagatedTasks } = propagateSchedule({
+        changedTaskId: 'A',
+        newStartDate: '2026-10-01',
+        newEndDate: '2026-10-05',
+        tasks: initialTasks,
+        dependencies,
+        bufferDays: 1
+      });
+
+      const taskF = propagatedTasks.find(t => t.id === 'F');
+      const taskD = propagatedTasks.find(t => t.id === 'D');
+
+      // D should start at max(B: 10-08, C: 10-10) -> 2026-10-10, end 2026-10-11
+      expect(taskD.start_date).toBe('2026-10-10');
+      expect(taskD.end_date).toBe('2026-10-11');
+
+      // F should start at D.end + 1 -> 2026-10-12, end 2026-10-13 (shifted exactly by +2 days)
+      expect(taskF.start_date).toBe('2026-10-12');
+      expect(taskF.end_date).toBe('2026-10-13');
     });
   });
 

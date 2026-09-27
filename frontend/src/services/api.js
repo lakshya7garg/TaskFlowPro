@@ -85,6 +85,13 @@ export async function removeDependency(dependency_id) {
   return data;
 }
 
+export async function fetchAiStatus() {
+  const res = await fetch(`${API_BASE}/ai-suggestions/status`);
+  const data = await res.json();
+  if (!data.success) return { mode: 'heuristic', description: 'Semantic Heuristic' };
+  return data;
+}
+
 export async function fetchAiSuggestions(task_id) {
   const res = await fetch(`${API_BASE}/tasks/${task_id}/ai-suggestions`);
   const data = await res.json();

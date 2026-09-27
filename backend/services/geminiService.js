@@ -5,16 +5,31 @@ dotenv.config();
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 let genAI = null;
+let isGeminiConfigured = false;
 
-if (GEMINI_API_KEY) {
+if (GEMINI_API_KEY && GEMINI_API_KEY !== 'your_gemini_api_key_here') {
   try {
     genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    isGeminiConfigured = true;
     console.log('[AI] Google Gemini client initialized with API key.');
   } catch (err) {
     console.warn('[AI] Failed to initialize Google Gemini client:', err.message);
   }
 } else {
-  console.warn('[AI] GEMINI_API_KEY is not set. Offline rule-based heuristic suggestions will be used as fallback for local testing.');
+  console.log('[AI] Running in offline semantic heuristic mode (set GEMINI_API_KEY in .env for live Gemini 1.5 Flash).');
+}
+
+/**
+ * Returns current status of AI engine
+ */
+export function getAiStatus() {
+  return {
+    mode: isGeminiConfigured ? 'gemini' : 'heuristic',
+    model: isGeminiConfigured ? 'gemini-1.5-flash' : 'semantic-heuristic-v1',
+    description: isGeminiConfigured
+      ? 'Google Gemini 1.5 Flash (Live Grounded Engine)'
+      : 'Semantic Heuristic Engine (Local Fallback)'
+  };
 }
 
 /**
@@ -50,7 +65,7 @@ export async function generateDependencySuggestions({ targetTask, allTasks, exis
   const validTaskIds = new Set(candidateTasks.map(t => t.id));
 
   // If Gemini API is available, invoke it
-  if (genAI && GEMINI_API_KEY && GEMINI_API_KEY !== 'your_gemini_api_key_here') {
+  if (genAI && isGeminiConfigured) {
     try {
       const model = genAI.getGenerativeModel({
         model: 'gemini-1.5-flash',
@@ -143,14 +158,16 @@ function generateHeuristicSuggestions(targetTask, candidateTasks) {
   const suggestions = [];
 
   const workflowPatterns = [
-    { targetKeyword: 'test', prereqKeyword: ['build', 'api', 'backend', 'develop', 'implement', 'feature'], rationale: 'Testing requires implementation/backend to be ready.', confidence: 'high' },
-    { targetKeyword: 'deploy', prereqKeyword: ['test', 'integration', 'build', 'review', 'e2e'], rationale: 'Deployment requires testing and builds to complete.', confidence: 'high' },
-    { targetKeyword: 'frontend', prereqKeyword: ['design', 'wireframe', 'mockup', 'schema'], rationale: 'Frontend implementation depends on design specifications.', confidence: 'high' },
-    { targetKeyword: 'ui', prereqKeyword: ['design', 'mockup', 'schema'], rationale: 'UI work depends on design assets.', confidence: 'high' },
+    { targetKeyword: 'test', prereqKeyword: ['build', 'api', 'backend', 'develop', 'implement', 'feature', 'schema'], rationale: 'Testing requires implementation and backend components to be complete.', confidence: 'high' },
+    { targetKeyword: 'deploy', prereqKeyword: ['test', 'integration', 'build', 'review', 'e2e', 'security'], rationale: 'Deployment requires testing and verification checks to pass.', confidence: 'high' },
+    { targetKeyword: 'frontend', prereqKeyword: ['design', 'wireframe', 'mockup', 'schema', 'architecture'], rationale: 'Frontend implementation depends on design specifications and schemas.', confidence: 'high' },
+    { targetKeyword: 'ui', prereqKeyword: ['design', 'mockup', 'schema', 'architecture'], rationale: 'UI work depends on design assets and theme systems.', confidence: 'high' },
     { targetKeyword: 'api', prereqKeyword: ['schema', 'database', 'model', 'architecture'], rationale: 'API implementation depends on database schema design.', confidence: 'high' },
     { targetKeyword: 'backend', prereqKeyword: ['schema', 'database', 'architecture'], rationale: 'Backend development depends on database design.', confidence: 'high' },
     { targetKeyword: 'integration', prereqKeyword: ['api', 'frontend', 'backend', 'auth'], rationale: 'Integration requires both API and interface components.', confidence: 'high' },
     { targetKeyword: 'auth', prereqKeyword: ['schema', 'database', 'user model'], rationale: 'Authentication depends on user/database schema.', confidence: 'medium' },
+    { targetKeyword: 'security', prereqKeyword: ['test', 'integration', 'api', 'auth'], rationale: 'Security assessment verifies working authentication and API endpoints.', confidence: 'high' },
+    { targetKeyword: 'load', prereqKeyword: ['test', 'integration', 'api', 'backend'], rationale: 'Load testing requires functional integrated endpoints.', confidence: 'high' },
     { targetKeyword: 'e2e', prereqKeyword: ['api', 'frontend', 'ui', 'integration'], rationale: 'End-to-end verification requires integrated functional components.', confidence: 'high' }
   ];
 
@@ -178,5 +195,6 @@ function generateHeuristicSuggestions(targetTask, candidateTasks) {
 }
 
 export default {
-  generateDependencySuggestions
+  generateDependencySuggestions,
+  getAiStatus
 };

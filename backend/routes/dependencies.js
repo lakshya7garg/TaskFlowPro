@@ -4,6 +4,7 @@ import {
   detectCycle,
   recomputeGraphDependencyStatuses
 } from '../engine/dagEngine.js';
+import { validateDependencyInput, isValidId } from '../utils/validation.js';
 
 const router = express.Router();
 
@@ -14,6 +15,11 @@ const router = express.Router();
 router.get('/tasks/:id/dependencies', async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!isValidId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid task ID format.' });
+    }
+
     const depsRes = await query(
       `SELECT d.id as dependency_id, d.source, d.created_at,
               t.id as prereq_task_id, t.title, t.column_status, t.dependency_status,
@@ -30,7 +36,7 @@ router.get('/tasks/:id/dependencies', async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching task dependencies:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to fetch task dependencies.' });
   }
 });
 
@@ -43,17 +49,11 @@ router.post('/', async (req, res) => {
   try {
     const { task_id, depends_on_task_id, source = 'manual' } = req.body;
 
-    if (!task_id || !depends_on_task_id) {
+    const validation = validateDependencyInput({ task_id, depends_on_task_id });
+    if (!validation.isValid) {
       return res.status(400).json({
         success: false,
-        error: 'Both task_id (downstream) and depends_on_task_id (prerequisite) are required.'
-      });
-    }
-
-    if (task_id === depends_on_task_id) {
-      return res.status(400).json({
-        success: false,
-        error: 'Cannot add dependency: A task cannot depend on itself.'
+        error: validation.errors.join(' ')
       });
     }
 
@@ -104,7 +104,7 @@ router.post('/', async (req, res) => {
       `INSERT INTO dependencies (task_id, depends_on_task_id, source)
        VALUES ($1, $2, $3)
        RETURNING *`,
-      [task_id, depends_on_task_id, source]
+      [task_id, depends_on_task_id, source || 'manual']
     );
 
     // Recompute graph dependency statuses
@@ -123,7 +123,7 @@ router.post('/', async (req, res) => {
     });
   } catch (err) {
     console.error('Error adding dependency:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to add dependency.' });
   }
 });
 
@@ -134,6 +134,10 @@ router.post('/', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!isValidId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid dependency ID format.' });
+    }
 
     const depRes = await query('SELECT * FROM dependencies WHERE id = $1', [id]);
     if (depRes.rowCount === 0) {
@@ -158,7 +162,7 @@ router.delete('/:id', async (req, res) => {
     });
   } catch (err) {
     console.error('Error removing dependency:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to remove dependency.' });
   }
 });
 

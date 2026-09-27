@@ -16,8 +16,15 @@ let pool = null;
 let dbType = 'postgres';
 
 const DATABASE_URL = process.env.DATABASE_URL;
+const DATA_DIR = path.join(__dirname, '..', 'data');
+const STATE_FILE = path.join(DATA_DIR, 'taskflow_store.json');
 
-// In-Memory Storage Data Structures (Zero-Config Turnkey Mode)
+// Ensure data directory exists for state persistence
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+// In-Memory Storage Data Structures with File Persistence
 const memStore = {
   tasks: new Map(),
   dependencies: new Map(),
@@ -25,7 +32,53 @@ const memStore = {
   audit_log: new Map()
 };
 
-// Check if real PostgreSQL database connection is provided
+/**
+ * Load persisted in-memory state from disk if available
+ */
+function loadStateFromDisk() {
+  try {
+    if (fs.existsSync(STATE_FILE)) {
+      const raw = fs.readFileSync(STATE_FILE, 'utf8');
+      const data = JSON.parse(raw);
+      if (data.tasks) {
+        memStore.tasks = new Map(Object.entries(data.tasks));
+      }
+      if (data.dependencies) {
+        memStore.dependencies = new Map(Object.entries(data.dependencies));
+      }
+      if (data.ai_suggestions) {
+        memStore.ai_suggestions = new Map(Object.entries(data.ai_suggestions));
+      }
+      if (data.audit_log) {
+        memStore.audit_log = new Map(Object.entries(data.audit_log));
+      }
+      console.log(`[DB] Restored ${memStore.tasks.size} tasks and ${memStore.dependencies.size} dependencies from disk state.`);
+    }
+  } catch (err) {
+    console.warn('[DB] Could not load state from disk, starting fresh:', err.message);
+  }
+}
+
+/**
+ * Save in-memory state to disk
+ */
+function persistStateToDisk() {
+  if (dbType !== 'memory') return;
+  try {
+    const payload = {
+      tasks: Object.fromEntries(memStore.tasks),
+      dependencies: Object.fromEntries(memStore.dependencies),
+      ai_suggestions: Object.fromEntries(memStore.ai_suggestions),
+      audit_log: Object.fromEntries(memStore.audit_log),
+      saved_at: new Date().toISOString()
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(payload, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[DB] Could not persist state to disk:', err.message);
+  }
+}
+
+// Initialize database mode
 if (DATABASE_URL && !process.env.FORCE_MEM) {
   try {
     pool = new Pool({
@@ -37,10 +90,12 @@ if (DATABASE_URL && !process.env.FORCE_MEM) {
   } catch (err) {
     console.warn('[DB] Failed to initialize PostgreSQL pool, falling back to in-memory store:', err.message);
     dbType = 'memory';
+    loadStateFromDisk();
   }
 } else {
   dbType = 'memory';
-  console.log('[DB] Running with in-memory store (set DATABASE_URL in .env for PostgreSQL)');
+  loadStateFromDisk();
+  console.log('[DB] Running with file-persisted in-memory store (set DATABASE_URL in .env for PostgreSQL)');
 }
 
 /**
@@ -66,22 +121,26 @@ export async function query(text, params = []) {
   if (/^DELETE\s+FROM\s+audit_log/i.test(cleanSql)) {
     const count = memStore.audit_log.size;
     memStore.audit_log.clear();
+    persistStateToDisk();
     return { rows: [], rowCount: count };
   }
   if (/^DELETE\s+FROM\s+ai_suggestions/i.test(cleanSql)) {
     const count = memStore.ai_suggestions.size;
     memStore.ai_suggestions.clear();
+    persistStateToDisk();
     return { rows: [], rowCount: count };
   }
   if (/^DELETE\s+FROM\s+dependencies\s+WHERE\s+id\s*=\s*\$1/i.test(cleanSql)) {
     const id = params[0];
     const exists = memStore.dependencies.has(id);
     memStore.dependencies.delete(id);
+    persistStateToDisk();
     return { rows: [], rowCount: exists ? 1 : 0 };
   }
   if (/^DELETE\s+FROM\s+dependencies/i.test(cleanSql)) {
     const count = memStore.dependencies.size;
     memStore.dependencies.clear();
+    persistStateToDisk();
     return { rows: [], rowCount: count };
   }
   if (/^DELETE\s+FROM\s+tasks\s+WHERE\s+id\s*=\s*\$1/i.test(cleanSql)) {
@@ -100,6 +159,7 @@ export async function query(text, params = []) {
         memStore.ai_suggestions.delete(sugId);
       }
     }
+    persistStateToDisk();
     return { rows: [], rowCount: exists ? 1 : 0 };
   }
   if (/^DELETE\s+FROM\s+tasks/i.test(cleanSql)) {
@@ -107,6 +167,7 @@ export async function query(text, params = []) {
     memStore.tasks.clear();
     memStore.dependencies.clear();
     memStore.ai_suggestions.clear();
+    persistStateToDisk();
     return { rows: [], rowCount: count };
   }
 
@@ -240,6 +301,7 @@ export async function query(text, params = []) {
       };
     }
     memStore.tasks.set(newTask.id, newTask);
+    persistStateToDisk();
     return { rows: [newTask], rowCount: 1 };
   }
 
@@ -252,6 +314,7 @@ export async function query(text, params = []) {
       created_at: new Date().toISOString()
     };
     memStore.dependencies.set(newDep.id, newDep);
+    persistStateToDisk();
     return { rows: [newDep], rowCount: 1 };
   }
 
@@ -266,6 +329,7 @@ export async function query(text, params = []) {
       created_at: new Date().toISOString()
     };
     memStore.ai_suggestions.set(newSug.id, newSug);
+    persistStateToDisk();
     return { rows: [newSug], rowCount: 1 };
   }
 
@@ -281,6 +345,7 @@ export async function query(text, params = []) {
       created_at: new Date().toISOString()
     };
     memStore.audit_log.set(newLog.id, newLog);
+    persistStateToDisk();
     return { rows: [newLog], rowCount: 1 };
   }
 
@@ -290,6 +355,7 @@ export async function query(text, params = []) {
     if (task) {
       task.dependency_status = params[0];
       task.updated_at = new Date().toISOString();
+      persistStateToDisk();
     }
     return { rows: task ? [task] : [], rowCount: task ? 1 : 0 };
   }
@@ -300,22 +366,24 @@ export async function query(text, params = []) {
       task.column_status = params[0];
       task.position = params[1];
       task.updated_at = new Date().toISOString();
+      persistStateToDisk();
     }
     return { rows: task ? [task] : [], rowCount: task ? 1 : 0 };
   }
 
-  if (/UPDATE\s+tasks\s+SET\s+start_date\s*=\s*\$1,\s*end_date\s*=\s*\$2,\s*base_duration_days\s*=\s*\$3.*WHERE\s+id\s*=\s*\$4/i.test(cleanSql)) {
+  if (/UPDATE\s+tasks\s+SET\s+start_date\s*=\s*\$1,\s*end_date\s*=\s*\$2,\s*base_duration_days\s*=\s*\$3[\s\S]*WHERE\s+id\s*=\s*\$4/i.test(cleanSql)) {
     const task = memStore.tasks.get(params[3]);
     if (task) {
       task.start_date = params[0];
       task.end_date = params[1];
       task.base_duration_days = params[2];
       task.updated_at = new Date().toISOString();
+      persistStateToDisk();
     }
     return { rows: task ? [task] : [], rowCount: task ? 1 : 0 };
   }
 
-  if (/UPDATE\s+tasks\s+SET\s+title\s*=\s*\$1.*WHERE\s+id\s*=\s*\$8/i.test(cleanSql)) {
+  if (/UPDATE\s+tasks\s+SET\s+title\s*=\s*\$1[\s\S]*WHERE\s+id\s*=\s*\$8/i.test(cleanSql)) {
     const task = memStore.tasks.get(params[7]);
     if (task) {
       task.title = params[0];
@@ -326,22 +394,46 @@ export async function query(text, params = []) {
       task.base_duration_days = params[5];
       task.position = params[6];
       task.updated_at = new Date().toISOString();
+      persistStateToDisk();
     }
     return { rows: task ? [task] : [], rowCount: task ? 1 : 0 };
   }
 
-  if (/UPDATE\s+ai_suggestions\s+SET\s+status\s*=\s*'accepted'\s+WHERE\s+id\s*=\s*\$1/i.test(cleanSql)) {
+  if (/UPDATE\s+tasks\s+SET\s+dependency_status\s*=\s*\$1[\s\S]*WHERE\s+id\s*=\s*\$2/i.test(cleanSql)) {
+    const task = memStore.tasks.get(params[1]);
+    if (task) {
+      task.dependency_status = params[0];
+      task.updated_at = new Date().toISOString();
+      persistStateToDisk();
+    }
+    return { rows: task ? [task] : [], rowCount: task ? 1 : 0 };
+  }
+
+  if (/UPDATE\s+tasks\s+SET\s+column_status\s*=\s*\$1,\s*position\s*=\s*\$2[\s\S]*WHERE\s+id\s*=\s*\$3/i.test(cleanSql)) {
+    const task = memStore.tasks.get(params[2]);
+    if (task) {
+      task.column_status = params[0];
+      task.position = params[1];
+      task.updated_at = new Date().toISOString();
+      persistStateToDisk();
+    }
+    return { rows: task ? [task] : [], rowCount: task ? 1 : 0 };
+  }
+
+  if (/UPDATE\s+ai_suggestions\s+SET\s+status\s*=\s*'accepted'[\s\S]*WHERE\s+id\s*=\s*\$1/i.test(cleanSql)) {
     const sug = memStore.ai_suggestions.get(params[0]);
     if (sug) {
       sug.status = 'accepted';
+      persistStateToDisk();
     }
     return { rows: sug ? [sug] : [], rowCount: sug ? 1 : 0 };
   }
 
-  if (/UPDATE\s+ai_suggestions\s+SET\s+status\s*=\s*'rejected'\s+WHERE\s+id\s*=\s*\$1/i.test(cleanSql)) {
+  if (/UPDATE\s+ai_suggestions\s+SET\s+status\s*=\s*'rejected'[\s\S]*WHERE\s+id\s*=\s*\$1/i.test(cleanSql)) {
     const sug = memStore.ai_suggestions.get(params[0]);
     if (sug) {
       sug.status = 'rejected';
+      persistStateToDisk();
     }
     return { rows: sug ? [sug] : [], rowCount: sug ? 1 : 0 };
   }
@@ -360,7 +452,7 @@ export async function initDb() {
     await pool.query(schemaSql);
     console.log('[DB] PostgreSQL schema initialized successfully.');
   } else {
-    console.log('[DB] In-memory store ready.');
+    console.log('[DB] File-backed in-memory store ready.');
   }
 }
 

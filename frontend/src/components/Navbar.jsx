@@ -8,7 +8,7 @@ import {
   RotateCcw,
   Plus,
   Sparkles,
-  Layers
+  Bot
 } from 'lucide-react';
 
 export default function Navbar({
@@ -20,8 +20,11 @@ export default function Navbar({
   onOpenAuditLogs,
   onResetDemo,
   onNewTask,
+  aiStatus = { mode: 'heuristic', description: 'Semantic Heuristic' },
   tasksCount = 0
 }) {
+  const isGeminiLive = aiStatus?.mode === 'gemini';
+
   return (
     <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur-md sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
@@ -74,6 +77,19 @@ export default function Navbar({
 
         {/* Right Tools & Actions */}
         <div className="flex items-center gap-2">
+          {/* AI Mode Indicator Badge */}
+          <div
+            title={aiStatus?.description}
+            className={`hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] border font-medium ${
+              isGeminiLive
+                ? 'bg-gradient-to-r from-teal-950/60 to-indigo-950/60 border-teal-500/40 text-teal-300'
+                : 'bg-slate-900 border-slate-800 text-slate-400'
+            }`}
+          >
+            <Sparkles className={`w-3 h-3 ${isGeminiLive ? 'text-amber-400 animate-pulse' : 'text-slate-400'}`} />
+            <span>{isGeminiLive ? 'Gemini 1.5 Flash' : 'Heuristic Mode'}</span>
+          </div>
+
           {/* Critical Path Toggle Button */}
           <button
             onClick={onToggleCriticalPath}

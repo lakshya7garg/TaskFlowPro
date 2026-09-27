@@ -16,6 +16,8 @@ yarn-error.log*
 dist/
 build/
 *.sqlite
+backend/data/*.json
+data/*.json
 
 # Testing & Coverage
 coverage/

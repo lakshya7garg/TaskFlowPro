@@ -12,10 +12,15 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// Security & Parsing Middleware
+app.use(cors({
+  origin: CORS_ORIGIN === '*' ? true : CORS_ORIGIN.split(','),
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(express.json({ limit: '1mb' }));
 
 // API Routes
 app.use('/api/tasks', tasksRouter);
@@ -38,7 +43,8 @@ app.get('/api/audit-logs', async (req, res) => {
     );
     res.json({ success: true, logs: logsRes.rows });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error('Error fetching audit logs:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch audit logs.' });
   }
 });
 
@@ -48,7 +54,8 @@ app.post('/api/seed/reset', async (req, res) => {
     await runSeed();
     res.json({ success: true, message: 'Database reset to initial demo state successfully.' });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error('Error resetting demo database:', err);
+    res.status(500).json({ success: false, error: 'Failed to reset demo database.' });
   }
 });
 
@@ -61,16 +68,17 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Global error handler
+// Centralized Safe Error Handler (Sanitizes stack traces in production)
 app.use((err, req, res, next) => {
-  console.error('[Unhandled Server Error]:', err);
-  res.status(500).json({
+  console.error('[API Error]:', err.message || err);
+  const isProd = process.env.NODE_ENV === 'production';
+  res.status(err.status || 500).json({
     success: false,
-    error: err.message || 'Internal Server Error'
+    error: isProd ? 'An internal server error occurred.' : (err.message || 'Internal Server Error')
   });
 });
 
-// Initialize database schema and start server
+// Start server function
 async function startServer() {
   try {
     await initDb();
@@ -83,19 +91,24 @@ async function startServer() {
       await runSeed();
     }
 
-    app.listen(PORT, () => {
-      console.log(`=========================================`);
-      console.log(` TaskFlow Pro Backend running on port ${PORT}`);
-      console.log(` Database: ${getDbType()}`);
-      console.log(` Health: http://localhost:${PORT}/api/health`);
-      console.log(`=========================================`);
-    });
+    if (process.env.NODE_ENV !== 'test') {
+      app.listen(PORT, () => {
+        console.log(`=========================================`);
+        console.log(` TaskFlow Pro Backend running on port ${PORT}`);
+        console.log(` Database: ${getDbType()}`);
+        console.log(` Health: http://localhost:${PORT}/api/health`);
+        console.log(`=========================================`);
+      });
+    }
   } catch (err) {
     console.error('Failed to start server:', err);
-    process.exit(1);
+    if (process.env.NODE_ENV !== 'test') process.exit(1);
   }
 }
 
-startServer();
+// Automatically start server when executed directly
+if (process.env.NODE_ENV !== 'test') {
+  startServer();
+}
 
 export default app;

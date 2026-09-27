@@ -1,9 +1,52 @@
 import express from 'express';
 import { query } from '../config/db.js';
-import { generateDependencySuggestions } from '../services/geminiService.js';
+import { generateDependencySuggestions, getAiStatus } from '../services/geminiService.js';
 import { detectCycle, recomputeGraphDependencyStatuses } from '../engine/dagEngine.js';
+import { isValidId } from '../utils/validation.js';
 
 const router = express.Router();
+
+// Lightweight in-memory rate limiter for AI generation requests (20 requests per minute per IP)
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const MAX_REQUESTS_PER_WINDOW = 20;
+
+function checkRateLimit(req, res, next) {
+  const ip = req.ip || req.connection.remoteAddress || 'localhost';
+  const now = Date.now();
+
+  const record = rateLimitMap.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+
+  if (now > record.resetAt) {
+    record.count = 1;
+    record.resetAt = now + RATE_LIMIT_WINDOW_MS;
+  } else {
+    record.count++;
+  }
+
+  rateLimitMap.set(ip, record);
+
+  if (record.count > MAX_REQUESTS_PER_WINDOW) {
+    return res.status(429).json({
+      success: false,
+      error: 'Rate limit exceeded: Maximum 20 AI suggestion requests per minute. Please wait before retrying.'
+    });
+  }
+
+  next();
+}
+
+/**
+ * GET /api/ai-suggestions/status
+ * Check current AI service mode (Gemini Live vs Heuristic Fallback)
+ */
+router.get('/status', (req, res) => {
+  const status = getAiStatus();
+  res.json({
+    success: true,
+    ...status
+  });
+});
 
 /**
  * GET /api/tasks/:id/ai-suggestions
@@ -12,6 +55,11 @@ const router = express.Router();
 router.get('/tasks/:id/ai-suggestions', async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!isValidId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid task ID format.' });
+    }
+
     const suggestionsRes = await query(
       `SELECT s.id, s.task_id, s.suggested_depends_on_task_id, s.confidence, s.rationale, s.status, s.created_at,
               t.title as suggested_prereq_title, t.column_status as suggested_prereq_column_status
@@ -28,7 +76,7 @@ router.get('/tasks/:id/ai-suggestions', async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching AI suggestions:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to fetch AI suggestions.' });
   }
 });
 
@@ -37,11 +85,11 @@ router.get('/tasks/:id/ai-suggestions', async (req, res) => {
  * Generate suggestions using Gemini API and store them as 'pending'
  * Body: { task_id }
  */
-router.post('/generate', async (req, res) => {
+router.post('/generate', checkRateLimit, async (req, res) => {
   try {
     const { task_id } = req.body;
-    if (!task_id) {
-      return res.status(400).json({ success: false, error: 'task_id is required.' });
+    if (!task_id || !isValidId(task_id)) {
+      return res.status(400).json({ success: false, error: 'Valid task_id is required.' });
     }
 
     const allTasksRes = await query('SELECT * FROM tasks');
@@ -100,7 +148,7 @@ router.post('/generate', async (req, res) => {
     });
   } catch (err) {
     console.error('Error generating AI suggestions:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to generate AI suggestions.' });
   }
 });
 
@@ -111,6 +159,10 @@ router.post('/generate', async (req, res) => {
 router.post('/:id/accept', async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!isValidId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid suggestion ID format.' });
+    }
 
     const sugRes = await query('SELECT * FROM ai_suggestions WHERE id = $1', [id]);
     if (sugRes.rowCount === 0) {
@@ -164,7 +216,7 @@ router.post('/:id/accept', async (req, res) => {
     });
   } catch (err) {
     console.error('Error accepting AI suggestion:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to accept AI suggestion.' });
   }
 });
 
@@ -175,6 +227,10 @@ router.post('/:id/accept', async (req, res) => {
 router.post('/:id/reject', async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!isValidId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid suggestion ID format.' });
+    }
 
     const sugRes = await query('SELECT * FROM ai_suggestions WHERE id = $1', [id]);
     if (sugRes.rowCount === 0) {
@@ -189,7 +245,7 @@ router.post('/:id/reject', async (req, res) => {
     });
   } catch (err) {
     console.error('Error rejecting AI suggestion:', err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Failed to reject AI suggestion.' });
   }
 });
 
